@@ -1,2 +1,1 @@
 sentence_transformers
-sklearn.metrics.pairwise
