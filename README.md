@@ -1,8 +1,8 @@
 ---
-title: Omdena Berlin Product Similarities
-emoji: 🌍
+title: Omdena Berlin Groceries Recommender
+emoji: 📚
 colorFrom: indigo
-colorTo: green
+colorTo: pink
 sdk: streamlit
 sdk_version: 1.21.0
 app_file: app.py

@@ -1,69 +1,185 @@
-# %%
 import pandas as pd
 import numpy as np
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 import streamlit as st
 
-# load data
-@st.cache_data
-def load_products_info():
-    return pd.read_csv('3_task_4_no_duplicates_reduced.csv', low_memory=False, encoding='utf-8')
-
-df = load_products_info()
-
-@st.cache_data
-def load_similarity_matrix():
-    return np.load("similarity_top_k.npy")
-    # return np.load("similarity_top_k_no_binned.npy")
-
-similarity = load_similarity_matrix()
-
-# page styling
+# PAGE STYLING
 st.markdown(f"""
     <style>
         p {{
             margin-bottom: 0;
         }}
-        div[data-testid="column"] {{
+        div[data-testid="column"]:nth-of-type(n+3) {{
             margin-bottom: 1rem;
-        }}
-        div[data-testid="stHorizontalBlock"] {{
-            margin: 1px solid red
         }}
         .block-container {{
             padding: 0
+        }}
+        footer {{
+            margin-top: 100px
+            display: none
+        }}
+        .stButton {{
+            margin-top: .5rem
         }}
     </style>""",
     unsafe_allow_html=True,
 )
 
-# output
-st.title('Berlin Groceries Product Similarities')
 
-query_params = st.experimental_get_query_params()
-if not query_params:
-    # user input
-    id = st.number_input("Select Product ID (0-"+str(similarity.shape[0])+"):", 0, similarity.shape[0], 45551)
-else:
-    id = int(query_params["id"][0])
-# recommendation = sorted(list(enumerate(similarity[idx])), key = lambda x:x[1], reverse = True)[:20]
+# DATA LOADING AND CACHING
+@st.cache_data
+def load_products_info():
+    return pd.read_csv('3_task_4_no_duplicates_reduced.zip', low_memory=False, encoding='utf-8')
 
-#output recommandations
-n_cols = 4
-j = 0
+df = load_products_info()
 
-# for i,score in recommendation:
-for i in similarity[id][:20]:
-    if j%n_cols == 0:
-        cols = st.columns(n_cols)
+@st.cache_data
+def load_embedings():
+    embedings_matrix = np.load("final_matrix_f64.npy")
+    return embedings_matrix[:,:384]
+
+embedings_matrix = load_embedings()
+
+@st.cache_data
+def load_similarity_matrix():
+    return np.load("similarity_top_k.npy")
+
+similarity = load_similarity_matrix()
+
+@st.cache_data
+def load_bert_model():
+    return SentenceTransformer('all-MiniLM-L6-v2')
+
+bert = load_bert_model()
+
+
+# FUNCTIONS THAT CHANGE SESSION VARIABLES
+def sort_recommendations():
+    if st.session_state.order=="Relevance":
+        st.session_state.recommendation_ids_ordered = st.session_state.recommendation_ids_filtered
     
-    with st.container():
-        with cols[j%n_cols]:
-            if pd.notna(df.iloc[i]['IMAGE_URL']):
-                st.image(df.iloc[i]['IMAGE_URL'])
-            if j==0:
-                st.write(":red[**Reference product**]")
-            st.markdown('['+df.iloc[i]['PRODUCT_NAME']+']('+df.iloc[i]['PRODUCT_LINK']+')', unsafe_allow_html=True)
-            st.write("**"+str(df.iloc[i]['STORE_NAME'])+"**")
-            st.write(":red[**"+str(df.iloc[i]['PRODUCT_PRICE'])+" €**]")
-            # st.write("**"+str(score)+"**")
-    j+=1
+    elif st.session_state.order=="Price ascending":
+        st.session_state.recommendation_ids_ordered = df.iloc[st.session_state.recommendation_ids_filtered].sort_values("PRODUCT_PRICE").index
+
+    else:
+        st.session_state.recommendation_ids_ordered = df.iloc[st.session_state.recommendation_ids_filtered].sort_values("PRODUCT_PRICE", ascending=False).index
+
+def get_recommendation_ids_full():
+    search_arr = np.array([st.session_state.search])
+
+    # get embeddings
+    search_embeddings = bert.encode(search_arr)
+
+    # cosine similarity
+    similarity_matrix = cosine_similarity(search_embeddings, embedings_matrix)
+
+    # retrieve and store top recommendation ids
+    st.session_state.recommendation_ids_full = np.argsort(similarity_matrix[0])[::-1]
+    st.session_state.recommendation_ids_filtered = st.session_state.recommendation_ids_full[:20]
+    st.session_state.recommendation_ids_ordered = st.session_state.recommendation_ids_filtered
+
+    # reset price filters
+    if "price_min" in st.session_state:
+        st.session_state.price_min = st.session_state.price_absolute_min
+        st.session_state.price_max = st.session_state.price_absolute_max
+
+def get_recommendation_ids_filtered():
+    st.session_state.recommendation_ids_filtered = \
+        df.iloc[st.session_state.recommendation_ids_full][(df["PRODUCT_PRICE"]>=st.session_state.price_min) & (df["PRODUCT_PRICE"]<=st.session_state.price_max)][:20].index
+    sort_recommendations()
+
+def change_product_id(new_product_id):
+    if new_product_id:
+        st.session_state.search_clone = st.session_state.search
+        st.session_state.price_min_clone = st.session_state.price_min
+        st.session_state.price_max_clone = st.session_state.price_max
+        st.session_state.order_clone = st.session_state.order
+    else:
+        st.session_state.search = st.session_state.search_clone
+        st.session_state.price_min = st.session_state.price_min_clone
+        st.session_state.price_max = st.session_state.price_max_clone
+        st.session_state.order = st.session_state.order_clone
+
+    st.product_id = new_product_id
+
+
+# OUTPUT FUNCTIONS
+def output_recommendations(ids, display_similarities=False):
+    n_cols = 4
+    j = 0
+
+    for i, row in df.iloc[ids].iterrows():
+        if j%n_cols == 0:
+            cols = st.columns(n_cols)
+        
+        with st.container():
+            with cols[j%n_cols]:
+                if pd.notna(row['IMAGE_URL']):
+                    st.image(row['IMAGE_URL'])
+                if display_similarities & (j==0):
+                    st.write(":red[**Reference product**]")
+                st.markdown('['+row['PRODUCT_NAME']+']('+row['PRODUCT_LINK']+')', unsafe_allow_html=True)
+                st.write("**"+str(row['STORE_NAME'])+"**")
+                st.write(":red[**"+str(row['PRODUCT_PRICE'])+" €**]")
+                if not display_similarities:
+                    st.button('similar products', key=""+str(i)+"", on_click=change_product_id, kwargs=({"new_product_id":i}))
+        j+=1
+
+
+# INITIALIZE SESSION VARIABLES
+if "search" not in st.session_state:
+    # initialize and associate widget (form) values with seesion variables
+    st.session_state.search = "chocolate gift large"
+    get_recommendation_ids_full()
+    st.session_state.price_absolute_min = int(df["PRODUCT_PRICE"].min())
+    st.session_state.price_absolute_max = int(df["PRODUCT_PRICE"].max())
+    st.session_state.price_min = st.session_state.price_absolute_min
+    st.session_state.price_max = st.session_state.price_absolute_max
+    st.product_id = False
+
+
+# OUTPUT
+if st.product_id:
+
+    st.title('Berlin Groceries Recommender: Product Similarities')
+
+    st.button('< Back to the initial search', on_click=change_product_id, kwargs=({"new_product_id":False}))
+
+    output_recommendations(similarity[st.product_id][:20], True)
+
+else:
+
+    st.title('Berlin Groceries Recommender')
+
+    st.text_input('Search query', key="search", on_change=get_recommendation_ids_full)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.number_input(
+            'Min price ('+str(st.session_state.price_absolute_min)+'-'+str(st.session_state.price_absolute_max)+')', 
+            min_value=st.session_state.price_absolute_min,
+            max_value=st.session_state.price_absolute_max,
+            key="price_min",
+            on_change=get_recommendation_ids_filtered
+        )
+
+    with col2:
+        st.number_input(
+            'Max price ('+str(st.session_state.price_absolute_min)+'-'+str(st.session_state.price_absolute_max)+')', 
+            min_value=st.session_state.price_absolute_min,
+            max_value=st.session_state.price_absolute_max,
+            key="price_max",
+            on_change=get_recommendation_ids_filtered
+        )
+
+    st.selectbox(
+        "Sort results by:",
+        ("Relevance", "Price ascending", "Price descending"),
+        on_change = sort_recommendations,
+        key = "order"
+    )
+
+    output_recommendations(st.session_state.recommendation_ids_ordered)
