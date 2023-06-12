@@ -23,6 +23,13 @@ st.markdown(f"""
         .stButton {{
             margin-top: .5rem
         }}
+        img {{
+            max-height: 172px
+        }}
+        .css-1kyxreq {{
+            align-items: center;
+            justify-content: center;
+        }}
     </style>""",
     unsafe_allow_html=True,
 )
